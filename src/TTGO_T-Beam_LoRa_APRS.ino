@@ -1,20 +1,19 @@
-
-// Tracker for LoRA APRS
+// ===================================================================================================================== //
+// TTGO T-Beam Lora APRS Tracker - Ham radio license required for use!
+// ===================================================================================================================== //
 //
 // TTGO T-Beam includes GPS module + optional DHT22 (not yet DONE)
 //
 // can be used as tracker only, tracker plus weather reports (temperature and humidity) or weather reports station only
 //
-// updated from OE1ACM sketch by OE3CJB to enable WX data to be sent via LoRa APRS.
+// Based on sketch by OE1ACM and updated by OE3CJB to enable WX data to be sent via LoRa APRS.
 // one package is with position and battery voltage
 // the next is with weather data in APRS format
 //
 // licensed under CC BY-NC-SA
-//
-// version: V1.2
-// last update: 02.01.2020
-//
-// change history
+// ===================================================================================================================== //
+// Change history:
+// --------------------------------------------------------------------------------------------------------------------- //
 // added course change to smart Beaconing
 // code cleaned
 // change of mode with KEY (without display but with LED only)
@@ -24,29 +23,50 @@
 // added HW Version V1.0 support
 // added presetting in the header TTGO...config.h to prevent long initial setup at first boot up
 // added "SPACE" to allowed letters for callsign for shorter callsigns - has to be added at the end
-// added smart beaconing
-//
-// version V1.0beta
-// first released version//
+// added smart beaconing (first try by OE3CJB with fix angle and hardcoded send intervals)
+// --------------------------------------------------------------------------------------------------------------------- //
+// 2020-04-10 - DL2MF - adding real smart beaconing with configurable settings and dynamic TX times
+// 2020-04-17 - DL2MF - BOSCH BME280 environment sensor added, supporting temp, pressure, humidity, altitude
+// ===================================================================================================================== //
 
-#define DEBUG false           // used for debugging purposes , e.g. turning on special serial or display logging
+#define DEBUG false               // used for debugging purposes , e.g. turning on special serial or display logging
 // Includes
-
 #include <TTGO_T-Beam_LoRa_APRS_config.h> // to config user parameters
 #include <Arduino.h>
 #include <Preferences.h>
 #include <Adafruit_Sensor.h>
 #include <SPI.h>
-#include <BG_RF95.h>         // library from OE1ACM
+#include <BG_RF95.h>              // library from OE1ACM
 
 #include <TinyGPS++.h>
 #include <math.h>
+
 #ifdef DS18B20
-   #include <OneWire.h>         // libraries for DS18B20
-   #include <DallasTemperature.h>
-#else
-   #include <DHTesp.h>          // library from https://github.com/beegee-tokyo/DHTesp for DHT22
+  #include <OneWire.h>            // libraries for DS18B20
+  #include <DallasTemperature.h>
+  String outSensor = "DS18B20";
+#endif  
+
+#ifdef BME280
+  #include <Adafruit_BME280.h>
+  //#define BME_SCK 13            // use this when connected to I2C bus
+  //#define BME_MISO 12           // (may be necessary if you also want to use SPI display)
+  //#define BME_MOSI 11
+  //#define BME_CS 10
+
+  #define BME_SDA 13              // see wiring scheme how to connect BME280
+  #define BME_SCL 14
+
+  //#define SEALEVELPRESSURE_HPA (1013.25)  // adjust this to local default hPa pressure
+  #define SEALEVELPRESSURE_HPA (1016.70)  // adjust this to local default hPa pressure  
+  String outSensor = "BME280";
 #endif
+
+#ifdef DHT22
+  #include <DHTesp.h>             // library from https://github.com/beegee-tokyo/DHTesp for DHT22
+  String outSensor = "DHT22";  
+#endif
+
 #include <driver/adc.h>
 #include <Wire.h>
 
@@ -80,13 +100,32 @@
 #define RFM95_INT 7
 */
 
+#ifdef BME280
+   Adafruit_BME280 bme; // I2C
+#endif
 
-// Variables for DHT22 temperature and humidity sensor
+#ifdef DHT22
+  DHTesp dht;   // Initialize DHT sensor for normal 16mhz Arduino
+  #define DHTPIN 25            // the DHT22 is connected to PIN25   
+#endif
+
+#ifdef DS18B20
+   OneWire oneWire(ONE_WIRE_BUS);
+   DallasTemperature sensors(&oneWire);
+   #define ONE_WIRE_BUS 25      // the DS18B20 is connected to PIN25
+#endif   
+
+String version = "v1.2";
+// Variables for BME280 / DHT22 environment sensors
 int chk;
 boolean hum_temp = false;
-float hum=0;                 //Stores humidity value
-float temp=99.99;            //Stores temperature value
-float tempf=99.99;           //Stores temperature value
+float hum=0;                  //Stores humidity value
+float temp=99.99;             //Stores temperature value
+float tempf=99.99;            //Stores temperature value
+int APRS_pres=0;              // used for type conversation to APRS pressure format (b=10132 = 1013.2hPa)
+float alti=0;                 // barometric altitude if BME280 connected
+float pres=0;                 // barometric pressure if BME280 connected
+
 
 //other global Variables
 String Textzeile1, Textzeile2;
@@ -119,7 +158,7 @@ const byte RX_en  = 0;       //TX/RX enable 1W modul
 #ifdef T_BEAM_V1_0
    const byte TXLED  = 33;      //pin number for LED on TX Tracker
 #else
-   const byte TXLED  = 14;      //pin number for LED on TX Tracker
+   const byte TXLED  = 32;      //pin number for LED on TX Tracker (14 in use for BME280!)
  #endif
 
 // Button of TTGO T-Beam
@@ -141,33 +180,38 @@ const byte RX_en  = 0;       //TX/RX enable 1W modul
    const byte lora_PReset = 23; //pin where LoRa device reset line is connected
    const byte lora_PNSS = 18;   //pin number where the NSS line for the LoRa device is connected.
 //#endif
-                             // pin 11  MOSI
-                             // pin 12  MISO
-                             // pin 13  SCLK
+                              // pin 11  MOSI
+                              // pin 12  MISO
+                              // pin 13  SCLK
 
 // #define ModemConfig BG_RF95::Bw125Cr45Sf4096
 
-#define DHTPIN 25            // the DHT22 is connected to PIN25
-#define ONE_WIRE_BUS 25      // the DS18B20 is connected to PIN25
+#define DHTPIN 25             // the DHT22 is connected to PIN25
+#define ONE_WIRE_BUS 25       // the DS18B20 is connected to PIN25
 
 // Variables for APRS packaging
-String Tcall;                //your Call Sign for normal position reports
-String wxTcall;              //your Call Sign for weather reports
-String sTable="/";           //Primer
-String wxTable="/";          //Primer
-String wxSymbol="_";         //Symbol Code Weather Station
+String Tcall;                 // your Call Sign for normal position reports
+String wxTcall;               // your Call Sign for weather reports
+String sTable="/";            // Primer
+String wxTable="/";           // Primer
+String wxSymbol="_";          // Symbol Code Weather Station
+String Tdest = "APZTTG";      // APRS TOCALL/destination ID (APZ... = official Experimental ID)  - set APRS_DEST in config.h to overwrite
+                              // http://aprs.org/aprs11/tocalls.txt
 
 // Tracker setting: use these lines to modify the tracker behaviour
-#define TXFREQ  433.775      // Transmit frequency in MHz
-#define TXdbmW  18           // Transmit power in dBm
-#define TXenablePA  0        // switch internal power amplifier on (1) or off (0)
+#define TXFREQ  433.775       // Transmit frequency in MHz
+int TXdbmW=18;                // Default Transmit power in dBm (settings in config avaliable for mobile/fixed station operation)
+#define TXenablePA  0         // switch internal power amplifier on (1) or off (0)
 
 // Variables and Constants
 Preferences prefs;
 
-String InputString = "";     //data on buff is copied to this string
+String InputString = "";      //data on buff is copied to this string
 String Outputstring = "";
-String outString="";         //The new Output String with GPS Conversion RAW
+String outString="";          //The new Output String with GPS Conversion RAW
+#if !defined BME280 && !defined DHT22 && !defined DS18B20    
+  String outSensor ="--";     // No external sensor type recognized
+#endif
 
 String LongShown="";
 String LatShown="";
@@ -180,30 +224,36 @@ String TxSymbol="";
 boolean wx;
 
 //byte arrays
-byte  lora_TXBUFF[128];      //buffer for packet to send
-byte  lora_RXBUFF[128];      //buffer for packet to send
+byte  lora_TXBUFF[128];       //buffer for packet to send
+byte  lora_RXBUFF[128];       //buffer for packet to send
 //byte Variables
-byte  lora_TXStart;          //start of packet data in TXbuff
-byte  lora_TXEnd;            //end of packet data in TXbuff
-byte  lora_FTXOK;            //flag, set to 1 if TX OK
-byte  lora_TXPacketType;     //type number of packet to send
-byte  lora_TXDestination;    //destination address of packet to send
-byte  lora_TXSource;         //source address of packet received
-byte  lora_FDeviceError;     //flag, set to 1 if RFM98 device error
-byte  lora_TXPacketL;        //length of packet to send, includes source, destination and packet type.
-
+byte  lora_TXStart;           //start of packet data in TXbuff
+byte  lora_TXEnd;             //end of packet data in TXbuff
+byte  lora_FTXOK;             //flag, set to 1 if TX OK
+byte  lora_TXPacketType;      //type number of packet to send
+byte  lora_TXDestination;     //destination address of packet to send
+byte  lora_TXSource;          //source address of packet received
+byte  lora_FDeviceError;      //flag, set to 1 if RFM98 device error
+byte  lora_TXPacketL;         //length of packet to send, includes source, destination and packet type.
 
 unsigned long lastTX = 0L;
 
 float BattVolts;
 
 // variables for smart beaconing
-float average_speed[5] = {0,0,0,0,0}, average_speed_final=0, max_speed=30, min_speed=0;
-float average_course[3] = {0,0,0};
-float old_course = 0, new_course = 0;
+float average_speed[5] = {0,0,0,0,0}, average_speed_final=0, max_speed=FAST_SPEED, min_speed=SLOW_SPEED;
+float average_course[TURN_TIME] = { };          // default value for array init with empty braces = 0/zero
+float calc_avgsin = 0;                             // sum course values for calculation of heading changes
+float calc_avgcos = 0;                             // sum course values for calculation of heading changes
+String STOP_FLAG = "0";                            // movement STOP recognized
+float old_course = 0, new_course = 0, old_time = 0;
 int point_avg_speed = 0, point_avg_course = 0;
-ulong min_time_to_nextTX=60000L;      // minimum time period between TX = 60000ms = 60secs = 1min
-ulong nextTX=60000L;          // preset time period between TX = 60000ms = 60secs = 1min
+ulong min_time_to_nextTX=FAST_RATE * 1000L;     // minimum time period between TX = 60000ms = 60secs = 1min
+//ulong min_time_to_nextTX=15 * 1000L;              // minimum time period between TX = 60000ms = 60secs = 1min
+#ifdef SLOW_RATE
+  ulong max_time_to_nextTX=SLOW_RATE * 1000L;       // set here MAXIMUM time in ms(!) for smart beaconing - minimum time is always 1 min = 60 secs = 60000L !!!
+#endif
+ulong nextTX=60000L;                              // preset time period between TX = 60000ms = 60secs = 1min
 
 static const adc_atten_t atten = ADC_ATTEN_DB_6;
 static const adc_unit_t unit = ADC_UNIT_1;
@@ -216,23 +266,12 @@ void batt_read(void);
 void writedisplaytext(String, String, String, String, String, String, int);
 void setup_data(void);
 
-
-#ifdef DS18B20
-   OneWire oneWire(ONE_WIRE_BUS);
-   DallasTemperature sensors(&oneWire);
-#else
-   DHTesp dht;   // Initialize DHT sensor for normal 16mhz Arduino
-#endif
-
-
 // SoftwareSerial ss(RXPin, TXPin);   // The serial connection to the GPS device
 HardwareSerial ss(1);        // TTGO has HW serial
 TinyGPSPlus gps;             // The TinyGPS++ object
 #ifdef T_BEAM_V1_0
   AXP20X_Class axp;
-#endif
-
-// checkRX
+#endif// checkRX
 uint8_t buf[BG_RF95_MAX_MESSAGE_LEN];
 uint8_t len = sizeof(buf);
 
@@ -253,7 +292,10 @@ void setup()
   prefs.begin("nvs", false);
   tracker_mode = (Tx_Mode)prefs.getChar("tracker_mode", 0);
   prefs.end();
-  //tracker_mode = current_mode;
+  #ifdef APRS_MODE
+    tracker_mode = APRS_MODE;
+  #endif
+
   /////////////////
   // hier muss aus dem RAM der Modus gelesen werden!
   /////////////////
@@ -269,7 +311,12 @@ void setup()
   digitalWrite(TXLED, LOW);  // turn blue LED off
   Serial.begin(115200);
 
-  Wire.begin(I2C_SDA, I2C_SCL);
+  #ifdef BME280
+    Wire.begin(BME_SDA, BME_SCL);
+  #else
+    Wire.begin(I2C_SDA, I2C_SCL);
+    delay(500);
+  #endif
 
   #ifdef T_BEAM_V1_0      // initialize power controller - new on HW V1.0
     if (!axp.begin(Wire, AXP192_SLAVE_ADDRESS)) {
@@ -292,24 +339,46 @@ void setup()
   if(!display.begin(SSD1306_SWITCHCAPVCC, SSD1306_ADDRESS)) {
      for(;;); // Don't proceed, loop forever
   }
-  writedisplaytext("LoRa-APRS","","Init:","Display OK!","","PRESS 3sec for config",1000);
+  smartDelay(250);
+  writedisplaytext("LoRa-APRS","Version: "+version,"SB-TA: "+String(TURN_ANGLE),"SB-TT:"+String(TURN_TIME),"","Starting .",1000);
+  writedisplaytext("LoRa-APRS","Smartbeaconing","Turn deg : "+String(TURN_ANGLE),"","","Starting ..",1000);
+  Serial.println("LoRa-APRS Version: "+version);  
+  Serial.println("LoRa-APRS SmartBeacon: TA="+String(TURN_ANGLE)+" TT="+String(TURN_TIME)+" SS: "+SLOW_SPEED+" SR: "+SLOW_RATE);
+  #if defined BME280 || defined DHT22 || defined DS18B20    
+    Serial.println("LoRa-APRS Sensor: "+outSensor); 
+  #endif  
+  //writedisplaytext("LoRa-APRS","Smartbeaconing","Turn deg : "+String(TURN_ANGLE),"Turn time: "+String(TURN_TIME),"","Starting ..",1000);
+  //writedisplaytext("LoRa-APRS","Smartbeaconing","Turn deg : "+String(TURN_ANGLE),"Turn time: "+String(TURN_TIME),"Fast rate: "+String(FAST_RATE),"Starting ..",1000); 
+  //writedisplaytext("LoRa-APRS","Smartbeaconing","Turn deg : "+String(TURN_ANGLE),"Turn time: "+String(TURN_TIME),"Fast rate: "+String(FAST_RATE),"Starting ...",1000);    
+  //writedisplaytext("LoRa-APRS","Smartbeaconing","Turn deg : "+String(TURN_ANGLE),"Turn time: "+String(TURN_TIME),"Fast rate: "+String(FAST_RATE),"Starting ....",1000);        
+  //writedisplaytext("LoRa-APRS","Smartbeaconing","Turn deg : "+String(TURN_ANGLE),"Turn time: "+String(TURN_TIME),"Fast rate: "+String(FAST_RATE),"Starting ....",1000);        
+  writedisplaytext("LoRa-APRS","Smartbeaconing","Turn deg : "+String(TURN_ANGLE),"Turn time: "+String(TURN_TIME),"Fast rate: "+String(FAST_RATE),"READY!",1000);            
+  smartDelay(2000);
+
+  writedisplaytext("LoRa-APRS","","Init","Display OK!","","PRESS 3sec for config",1000);
   Serial.println("LoRa-APRS / Init / Display OK! / PRESS 3sec for config");
 
   #ifndef DONT_USE_FLASH_MEMORY
   //////////////////////////// Setup CALLSIGN
-  prefs.begin("nvs", false);
-  Tcall = prefs.getString("Tcall", CALLSIGN);
-  wxTcall = prefs.getString("wxTcall", WX_CALLSIGN);
-  LongFixed = prefs.getString("LongFixed", LONGITUDE_PRESET);
-  LatFixed = prefs.getString("LatFixed", LATIDUDE_PRESET);
-  TxSymbol = prefs.getString("TxSymbol", APRS_SYMBOL);
-  prefs.end();
+    prefs.begin("nvs", false);
+    Tcall = prefs.getString("Tcall", CALLSIGN);
+    wxTcall = prefs.getString("wxTcall", WX_CALLSIGN);
+    LongFixed = prefs.getString("LongFixed", LONGITUDE_PRESET);
+    LatFixed = prefs.getString("LatFixed", LATIDUDE_PRESET);
+    TxSymbol = prefs.getString("TxSymbol", APRS_SYMBOL);
+    prefs.end();
   #else
-  Tcall = CALLSIGN;
-  wxTcall = WX_CALLSIGN;
-  LongFixed = LONGITUDE_PRESET;
-  LatFixed = LATIDUDE_PRESET;
-  TxSymbol = APRS_SYMBOL;
+    Tcall = CALLSIGN;
+    #ifdef APRS_DEST
+      Tdest = APRS_DEST;                      // Assign only official APRS destination registered by WB8APR!!
+    #endif
+    wxTcall = WX_CALLSIGN;
+    LongFixed = LONGITUDE_PRESET;
+    LatFixed = LATIDUDE_PRESET;
+    TxSymbol = APRS_SYMBOL;
+    #ifdef MAX_TIME
+      max_time_to_nextTX = MAX_TIME * 1000;
+    #endif  
   #endif
 
   Serial.println("LoRa-APRS / Call="+Tcall+" / WX-Call="+wxTcall+" / TxSymbol="+TxSymbol);
@@ -378,8 +447,8 @@ void setup()
     Serial.println("LoRa-APRS / Init / GPS Serial OK!");
     writedisplaytext(" "+Tcall,"","Init:","Waiting for GPS","","",250);
     Serial.println("LoRa-APRS / Init / Waiting for GPS");
-    while (millis() < 5000 && gps.charsProcessed() < 10) {}
-    if (millis() > 5000 && gps.charsProcessed() < 10) {
+    while (millis() < 6000 && gps.charsProcessed() < 10) {}
+    if (millis() > 6000 && gps.charsProcessed() < 10) {
       writedisplaytext(" "+Tcall,"","Init:","ERROR!","No GPS data!","Please restart TTGO",0);
       Serial.println("LoRa-APRS / Init / GPS ERROR - no GPS data - please RESTART TTGO");
       while (true) {blinker(1);}
@@ -395,7 +464,7 @@ void setup()
     writedisplaytext("LoRa-APRS","","Init:","ADC OK!","BAT: "+String(axp.getBattVoltage()/1000,1),"",250);
     Serial.print("LoRa-APRS / Init / ADC OK! / BAT: ");
     Serial.println(String(axp.getBattVoltage()/1000,1));
-#else
+  #else
     adc1_config_width(ADC_WIDTH_BIT_12);
     adc1_config_channel_atten(ADC1_CHANNEL_7,ADC_ATTEN_DB_6);
     writedisplaytext("LoRa-APRS","","Init:","ADC OK!","BAT: "+String(analogRead(35)*7.221/4096,1),"",250);
@@ -405,26 +474,51 @@ void setup()
 
   rf95.setFrequency(433.775);
   rf95.setModemConfig(BG_RF95::Bw125Cr45Sf4096); // hard coded because of double definition
-  rf95.setTxPower(5);
+  rf95.setTxPower(18);
 
   #ifdef DS18B20
     sensors.begin();
-  #else
-    dht.setup(DHTPIN,dht.AUTO_DETECT); // initialize DHT22
   #endif
+  
+  #ifdef BME280
+      bool status = bme.begin();  
+      if (!status) {
+        Serial.println("Could not find a valid BME280 sensor, check wiring!");
+        while (1);
+      }
+  #endif
+
+  #ifdef DHT22
+    dht.setup(DHTPIN,dht.AUTO_DETECT);  // initialize DHT22
+  #endif
+  
   delay(250);
   #ifdef DS18B20
     sensors.requestTemperatures(); // Send the command to get temperature readings
     temp = sensors.getTempCByIndex(0); // get temp from 1st (!) sensor only
-      #else
+  #endif
+
+  #ifdef BME280
+    temp = bme.readTemperature();
+    hum = bme.readHumidity();      
+  #endif
+
+  #ifdef DHT22
     temp = dht.getTemperature();
     hum = dht.getHumidity();
   #endif
-  writedisplaytext("LoRa-APRS","","Init:","DHT OK!","TEMP: "+String(temp,1),"HUM: "+String(hum,1),250);
-  Serial.print("LoRa-APRS / Init / DHT OK! Temp=");
-  Serial.print(String(temp));
-  Serial.print(" Hum=");
-  Serial.println(String(hum));
+
+  writedisplaytext("LoRa-APRS","","Init:",outSensor+" OK!","TEMP: "+String(temp,1),"HUM: "+String(hum,1),250);
+  Serial.println("LoRa-APRS / Init / Sensor: "+outSensor+" OK!");
+  
+  Serial.println("Temp: "+String(temp));
+  Serial.println("Humi: "+String(hum));
+  #ifdef BME280
+    Serial.println("Pres: "+String(bme.readPressure()/100.0F)+" hPa");
+    Serial.println("Alti: "+String(bme.readAltitude(SEALEVELPRESSURE_HPA))+"m");
+  #endif    
+
+
   writedisplaytext("LoRa-APRS","","Init:","FINISHED OK!","   =:-)   ","",250);
   Serial.println("LoRa-APRS / Init / FINISHED OK! / =:-)");
   writedisplaytext("","","","","","",0);
@@ -486,14 +580,25 @@ void loop() {
     #ifdef DS18B20
       sensors.requestTemperatures(); // Send the command to get temperature readings
       temp = sensors.getTempCByIndex(0); // get temp from 1st (!) sensor only
-    #else
+    #endif
+
+    #ifdef DHT22
       temp = dht.getTemperature();
     #endif
   } else {
     hum_temp=true;
     #ifdef DS18B20
       hum = 0;
-    #else
+    #endif
+
+    #ifdef BME280
+      temp = bme.readTemperature();
+      hum = bme.readHumidity();
+      pres = (bme.readPressure()/100.0F);
+      alti = bme.readAltitude(SEALEVELPRESSURE_HPA);
+    #endif
+
+    #ifdef DHT22
       hum = dht.getHumidity();
     #endif
   }
@@ -527,33 +632,89 @@ void loop() {
     ++point_avg_speed;
     if (point_avg_speed>4) {point_avg_speed=0;}
     average_speed_final = (average_speed[0]+average_speed[1]+average_speed[2]+average_speed[3]+average_speed[4])/5;
-    nextTX = (max_time_to_nextTX-min_time_to_nextTX)/(max_speed-min_speed)*(max_speed-average_speed_final)+min_time_to_nextTX;
 
-    if (nextTX < min_time_to_nextTX) {nextTX=min_time_to_nextTX;}
-    if (nextTX > max_time_to_nextTX) {nextTX=max_time_to_nextTX;}
+    if (average_speed_final<=SLOW_SPEED) {
+      if ((average_speed_final<=1) && (STOP_BEACON==1) && (STOP_FLAG!="1")) {
+        nextTX = 0;
+        STOP_FLAG="1";
+       Serial.println("MOVING STOP: TX= "+String(nextTX));        
+      } else {
+        nextTX = (SLOW_RATE*1000);
+        Serial.println("SLOW RATE: "+String(nextTX));
+      }
+    } else {  
+      nextTX = (max_time_to_nextTX-min_time_to_nextTX)/(max_speed-min_speed)*(max_speed-average_speed_final)+min_time_to_nextTX;      
+      Serial.println("FAST RATE: "+String(nextTX));     
+    }
 
-    average_course[point_avg_course] = gps.course.deg();   // calculate smart beaconing course
+    if (nextTX < min_time_to_nextTX) {
+      if ((nextTX==0) && (STOP_BEACON==1) && (STOP_FLAG!="0")) {
+        Serial.println("NEXT TX: "+String(nextTX)+"  -> STOP flag set, ignore maxtime: "+String(max_time_to_nextTX));
+      } else {  
+        nextTX=min_time_to_nextTX;
+      }
+    }
+
+    if ((average_speed_final>(FAST_SPEED-SLOW_SPEED)) && (STOP_BEACON==1) && (STOP_FLAG=="1")) { 
+      STOP_FLAG="0"; }      // reset STOP flag when fast_speed was reached again
+
+    if (average_speed_final>(SLOW_SPEED)) { 
+      min_time_to_nextTX = FAST_RATE * 1000; 
+    } else {
+      min_time_to_nextTX = SLOW_RATE * 1000; 
+    }  
+
+    //if (nextTX > max_time_to_nextTX) {nextTX=max_time_to_nextTX;}
+    if (nextTX > max_time_to_nextTX) { 
+      #ifdef DEBUG   
+        Serial.println("NEXT TX: "+String(nextTX)+"  -> check maxtime: "+String(max_time_to_nextTX));
+      #endif
+      nextTX=max_time_to_nextTX;
+    }
+
+    average_course[point_avg_course] = gps.course.deg();    // calculate smart beaconing course
     ++point_avg_course;
-    if (point_avg_course>2) {
+    if (point_avg_course>=TURN_TIME) {                     // read and calculate average turn angle for defined time from config
       point_avg_course=0;
+      calc_avgsin = 0;
+      calc_avgcos = 0;
       // new_course = (average_course[0]+average_course[1]+average_course[2])/3;
-      new_course = atan ((sin(average_course[0])+sin(average_course[1])+sin(average_course[2]))/(cos(average_course[0])+cos(average_course[1])+cos(average_course[2])));
-      if ((old_course < 30) && (new_course > 330)) {
-        if (abs(new_course-old_course-360)>=30) {
+
+      for ( int i=0 ; i < TURN_TIME ; i++) {
+        calc_avgsin = calc_avgsin + sin(average_course[i]);
+        calc_avgcos = calc_avgcos + cos(average_course[i]);        
+      }
+      //new_course = atan (    (sin(average_course[0])+sin(average_course[1])+sin(average_course[2])   )   /(cos(average_course[0])+cos(average_course[1])+cos(average_course[2])));
+      new_course = atan((calc_avgsin)/(calc_avgcos));    // course change calculation over TURN_TIME period of time
+
+      if ((old_course < TURN_ANGLE) && (new_course > (360-TURN_ANGLE))) {
+        if (abs(new_course-old_course-360)>=TURN_ANGLE) {
           nextTX = 0;
         }
       } else {
-        if ((old_course > 330) && (new_course < 30)) {
-          if (abs(new_course-old_course+360)>=30) {
+        if ((old_course > (360-TURN_ANGLE)) && (new_course < TURN_ANGLE)) {
+          if (abs(new_course-old_course+360)>=TURN_ANGLE) {
             nextTX = 0;
           }
         } else {
-          if (abs(new_course-old_course)>=30) {
+          if (abs(new_course-old_course)>=TURN_ANGLE) {
             nextTX = 0;
           }
         }
       }
+      Serial.println("Smart: LAT: "+LatShown+" LON: "+LongShown+" TTI: "+String(TURN_TIME,1)+"  CRS: "+String(gps.course.deg(),1)+" OLD: "+String(old_course,1)+"  NEW: "+String(new_course,1) ); 
+
+      #ifdef BME280
+        tempf = bme.readTemperature()*9/5+32;
+        hum = bme.readHumidity();
+        //pres = (bme.readPressure()/100.0F);
+        APRS_pres = (int)(bme.readPressure()/10);
+        alti = bme.readAltitude(SEALEVELPRESSURE_HPA);
+        Serial.println("Temp: "+String(tempf)+" Hum: "+String(hum)+" Pres: "+String(APRS_pres)+" Alt: "+String(alti));
+      #endif
+
       old_course = new_course;
+      old_time = (millis()/1000);       // last TX millis counter
     }
 
   } else {
@@ -575,7 +736,7 @@ void loop() {
   if ( (lastTX+nextTX) <= millis()  ) {
     if (tracker_mode != WX_FIXED) {
       // if (gps.location.isValid()) {
-      if (gps.location.age() < 2000) {
+      if (gps.location.age() < 3000) {
         digitalWrite(TXLED, HIGH);
         if (hum_temp) {
           writedisplaytext(" ((TX))","","LAT: "+LatShown,"LON: "+LongShown,"SPD: "+String(gps.speed.kmph(),1)+"  CRS: "+String(gps.course.deg(),1),"BAT: "+String(BattVolts,1)+"  HUM: "+String(hum,1),0);
@@ -723,17 +884,30 @@ switch(tracker_mode) {
       sensors.requestTemperatures(); // Send the command to get temperature readings
       tempf = sensors.getTempFByIndex(0); // get temp from 1st (!) sensor only
       hum = 0;
-    #else
+    #endif
+
+    #ifdef BME280
+      tempf = bme.readTemperature()*9/5+32;
+      hum   = bme.readHumidity();
+      alti  = bme.readAltitude(SEALEVELPRESSURE_HPA);
+      pres  = (bme.readPressure()/100.0F);
+      APRS_pres = (int)(bme.readPressure()/10);       // pressure formatted to APRS bnnnnn - b10132 = 1013.2 hPa      
+    #endif
+
+    #ifdef DHT22    
       hum = dht.getHumidity();
       tempf = dht.getTemperature()*9/5+32;
     #endif
-    for (i=0; i<wxTcall.length();++i){  // remove unneeded "spaces" from callsign field
+    for (i=0; i<wxTcall.length();++i){                // remove unneeded "spaces" from callsign field
       if (wxTcall.charAt(i) != ' ') {
         outString += wxTcall.charAt(i);
       }
     }
     // outString = wxTcall;
-    outString += ">APRS:!";
+    //outString += ">APRS:!";
+    outString += ">";
+    outString += Tdest;
+    outString += ":!";    
     outString += LatFixed;
     outString += wxTable;
     outString += LongFixed;
@@ -755,7 +929,20 @@ switch(tracker_mode) {
     helper = String(hum,0);
     helper.trim();
     outString += helper;
-    outString += "b......DHT22";
+    #ifdef BME280
+      outString += "b";
+      helper = "00000"+String(APRS_pres);
+      helper = helper.substring(helper.length()-5);
+      outString += helper;
+    #else
+      outString += "b......";    
+    #endif
+    outString += " ";     
+    outString += outSensor;
+    outString += " h="; 
+    outString += alti;
+    outString += " hPa="; 
+    outString += pres;          
     break;
   case WX_TRACKER:
     if (wx) {
@@ -763,7 +950,17 @@ switch(tracker_mode) {
         sensors.requestTemperatures(); // Send the command to get temperature readings
         tempf = sensors.getTempFByIndex(0); // get temp from 1st (!) sensor only
         hum = 0;
-      #else
+      #endif
+
+      #ifdef BME280
+        tempf = bme.readTemperature()*9/5+32;
+        hum = bme.readHumidity();
+        pres = (bme.readPressure()/100.0F);
+        APRS_pres = (int)(bme.readPressure()/10);        
+        alti = bme.readAltitude(SEALEVELPRESSURE_HPA);
+      #endif
+
+      #ifdef DHT22
         hum = dht.getHumidity();
         tempf = dht.getTemperature()*9/5+32;
       #endif
@@ -773,7 +970,9 @@ switch(tracker_mode) {
         }
       }
       // outString = (wxTcall);
-      outString += ">APRS:!";
+      outString += ">";
+      outString += Tdest;
+      outString += ":!"; 
       if(Tlat<10) {outString += "0"; }
       outString += String(Lat,2);
       outString += Ns;
@@ -800,7 +999,19 @@ switch(tracker_mode) {
       helper = String(hum,0);
       helper.trim();
       outString += helper;
-      outString += "b......DHT22";
+      #ifdef BME280
+        outString += "b";
+        helper = "00000"+String(APRS_pres);
+        helper = helper.substring(helper.length()-5);
+        outString += helper;
+      #else
+        outString += "b......";    
+      #endif
+      outString += outSensor;
+      outString += "PresAlt="; 
+      outString += alti;
+      outString += "hPA="; 
+      outString += pres;             
       wx = !wx;
     } else {
       for (i=0; i<Tcall.length();++i){  // remove unneeded "spaces" from callsign field
@@ -809,7 +1020,9 @@ switch(tracker_mode) {
         }
       }
       // outString = (Tcall);
-      outString += ">APRS:!";
+      outString += ">";
+      outString += Tdest;
+      outString += ":!"; 
       if(Tlat<10) {outString += "0"; }
       outString += String(Lat,2);
       outString += Ns;
@@ -832,7 +1045,17 @@ case WX_MOVE:
       sensors.requestTemperatures(); // Send the command to get temperature readings
       tempf = sensors.getTempFByIndex(0); // get temp from 1st (!) sensor only
       hum = 0;
-    #else
+    #endif
+
+    #ifdef BME280
+      tempf = bme.readTemperature()*9/5+32;
+      hum = bme.readHumidity();
+      pres = (bme.readPressure()/100.0F);
+      APRS_pres = (int)(bme.readPressure()/10);      
+      alti = bme.readAltitude(SEALEVELPRESSURE_HPA);
+    #endif
+
+    #ifdef DHT22
       hum = dht.getHumidity();
       tempf = dht.getTemperature()*9/5+32;
     #endif
@@ -841,8 +1064,10 @@ case WX_MOVE:
         outString += wxTcall.charAt(i);
       }
     }
-    // outString = (wxTcall);
-    outString += ">APRS:!";
+
+    outString += ">";
+    outString += Tdest;
+    outString += ":!"; 
     if(Tlat<10) {outString += "0"; }
     outString += String(Lat,2);
     outString += Ns;
@@ -869,7 +1094,20 @@ case WX_MOVE:
     helper = String(hum,0);
     helper.trim();
     outString += helper;
-    outString += "b......DHT22";
+    #ifdef BME280
+      outString += "b";
+      helper = "00000"+String(APRS_pres);
+      helper = helper.substring(helper.length()-5);
+       outString += helper;
+    #else
+      outString += "b......";    
+    #endif
+    outString += " ";     
+    outString += outSensor;
+    outString += " h="; 
+    outString += alti;
+    outString += " hPa="; 
+    outString += pres;          
     break;
   case TRACKER:
   default:
@@ -879,7 +1117,9 @@ case WX_MOVE:
       }
     }
     // outString = (Tcall);
-    outString += ">APRS:!";
+    outString += ">";
+    outString += Tdest;
+    outString += ":!"; 
     if(Tlat<10) {outString += "0"; }
     outString += String(Lat,2);
     outString += Ns;
@@ -925,6 +1165,7 @@ switch(tracker_mode) {
   case WX_FIXED:
     recalcGPS();                        //
     Outputstring =outString;
+    TXdbmW = byte(LOW_TXPOWER);
     loraSend(lora_TXStart, lora_TXEnd, 60, 255, 1, 10, TXdbmW, TXFREQ);  //send the packet, data is in TXbuff from lora_TXStart to lora_TXEnd
     break;
   case TRACKER:
@@ -934,6 +1175,12 @@ switch(tracker_mode) {
     if ( gps.location.isValid()   || gps.location.isUpdated() ) {
       recalcGPS();                        //
       Outputstring =outString;
+      if (gps.speed.kmph()>=double(FAST_SPEED)) {
+        TXdbmW = byte(MAX_TXPOWER);
+      } else {
+        TXdbmW = byte(STD_TXPOWER);
+      }
+
       loraSend(lora_TXStart, lora_TXEnd, 60, 255, 1, 10, TXdbmW, TXFREQ);  //send the packet, data is in TXbuff from lora_TXStart to lora_TXEnd
     }  else {
       Outputstring = (Tcall);
@@ -941,7 +1188,7 @@ switch(tracker_mode) {
       Outputstring += " Batt=";
       Outputstring += String(BattVolts,2);
       Outputstring += ("V ");
-      loraSend(lora_TXStart, lora_TXEnd, 60, 255, 1, 10, 5, TXFREQ);  //send the packet, data is in TXbuff from lora_TXStart to lora_TXEnd
+      loraSend(lora_TXStart, lora_TXEnd, 60, 255, 1, 10, LOW_TXPOWER, TXFREQ);  //send the packet, data is in TXbuff from lora_TXStart to lora_TXEnd
     }
     break;
   }
