@@ -4,7 +4,7 @@ He is the author of BG_RF95!<br>
 If you want to discuss with other LoRa APRS interested persons join the growing community at the LoRa-APRS Telegram group<br>
 <br><hr>
 <b>This is my forked DL2MF version, adding a lot of missed features and functions to this excellent tracker firmware for the TTGO</b><br>
-
+In this version I've added enhanced smart beaconing and some more configurable options and support for the BOSCH BME280.
 <br><hr>
 <b>USER GUIDE of TTGO T-Beam LoRa APRS V1.2:</b><br>
 <b>Attention: a new HW Version is available - if you use the old version uncomment "// #define T_BEAM_V0_7" and comment out "#define T_BEAM_V1_0".</b>You can recognize the new Rev1.0-Boards at their three push buttons instead of two at the older boards - both versions are now supported.<br>
@@ -42,13 +42,14 @@ The symbol can now be changed without attached display - during normal operation
 <br>
 <b>show RX packets</b><br>
 by uncommenting <b>// #define SHOW_RX_PACKET</b> the tracker shows received LoRa APRS packets in raw format for the time in milliseconds defined in SHOW_RX_TIME - both in ...config.h<br>
-<br>
-<b>New features V1.4"</b><br>
-<ul>adding BME280 support, build a simple WX_STATION with a TTGO and a single BME280 environment sensor!</ul>
-<ul>adding config option for pre-defined tracker mode</ul>
-<ul>extended smart beaconing depending on config settings (sample config options for jogger, bike, car included)</ul>
-<ul>many new options (TURN_TIME, TURN_ANGLE, SLOW_SPEED, SLOW_RATE, FAST_SPEED, FAST_RATE</ul>
-<ul>various power level features</ul>
+<hr>
+<b>New features V1.4 - by DL2MF</b><br>
+<ul>- adding BME280 support, build a simple WX_STATION with a TTGO and a single BME280 environment sensor!</ul>
+<ul>- adding config option for pre-defined tracker mode</ul>
+<ul>- extended smart beaconing depending on config settings (sample config options for jogger, bike, car included)</ul>
+<ul>- many new options (TURN_TIME, TURN_ANGLE, SLOW_SPEED, SLOW_RATE, FAST_SPEED, FAST_RATE</ul>
+<ul>- various power level features</ul>
+<hr>
 <b>Previous features:</b><br>
 - show RX packets
 - DS18B20 support (setable in config.h)
