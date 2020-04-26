@@ -115,7 +115,7 @@
    #define ONE_WIRE_BUS 25      // the DS18B20 is connected to PIN25
 #endif   
 
-String version = "v1.2";
+String version = "v1.4";
 // Variables for BME280 / DHT22 environment sensors
 int chk;
 boolean hum_temp = false;

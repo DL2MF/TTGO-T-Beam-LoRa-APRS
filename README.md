@@ -2,7 +2,10 @@ First of all I want to thank OE1ACM Bernd for his approval to use his code for m
 He is the author of BG_RF95!<br>
 <br>
 If you want to discuss with other LoRa APRS interested persons join the growing community at the LoRa-APRS Telegram group<br>
-<br>
+<br><hr>
+<b>This is my forked DL2MF version, adding a lot of missed features and functions to this excellent tracker firmware for the TTGO</b><br>
+
+<br><hr>
 <b>USER GUIDE of TTGO T-Beam LoRa APRS V1.2:</b><br>
 <b>Attention: a new HW Version is available - if you use the old version uncomment "// #define T_BEAM_V0_7" and comment out "#define T_BEAM_V1_0".</b>You can recognize the new Rev1.0-Boards at their three push buttons instead of two at the older boards - both versions are now supported.<br>
 As the new board only has two LEDs for the GPS and battery charger I've moved the TX Led to PIN 33 - please use a LED with reasonable resistor of 470R.<br>
@@ -33,14 +36,20 @@ The symbol can now be changed without attached display - during normal operation
 <b>2x TX LED blinks represent "yes" to leave the setup</b> - press here the key to leave the setup - please do so if you don't have a display attached.<br>
 1x TX LED blinks represent "no" to continue with the setup - press here the key to continue the setup - please do so if you have a display attached.<br>
 <br>
-<b>Temperature Sensor:</b><br>
-for DHT22 I used the library from https://github.com/beegee-tokyo/DHTesp, as the standard library gives to many wrong readings<br>
-Now the DS18B20 is supported as well - uncomment line 31: // #define DS18B20    // use this if you use DS18B20, default ist DHT22<br>
+<b>Temperature Sensors:</b><br>
+- DHT22 support by te library from https://github.com/beegee-tokyo/DHTesp, as the standard library gives to many wrong readings<br>
+- DS18B20 is supported as well - uncomment line 31: // #define DS18B20    // use this if you use DS18B20, default ist DHT22<br>
 <br>
 <b>show RX packets</b><br>
 by uncommenting <b>// #define SHOW_RX_PACKET</b> the tracker shows received LoRa APRS packets in raw format for the time in milliseconds defined in SHOW_RX_TIME - both in ...config.h<br>
 <br>
-<b>new features:</b><br>
+<b>New features V1.4"</b><br>
+<ul>adding BME280 support, build a simple WX_STATION with a TTGO and a single BME280 environment sensor!</ul>
+<ul>adding config option for pre-defined tracker mode</ul>
+<ul>extended smart beaconing depending on config settings (sample config options for jogger, bike, car included)</ul>
+<ul>many new options (TURN_TIME, TURN_ANGLE, SLOW_SPEED, SLOW_RATE, FAST_SPEED, FAST_RATE</ul>
+<ul>various power level features</ul>
+<b>Previous features:</b><br>
 - show RX packets
 - DS18B20 support (setable in config.h)
 - GPS switched off in WX_FIXED mode (only available with boards with HW-Version >=V1.0)
